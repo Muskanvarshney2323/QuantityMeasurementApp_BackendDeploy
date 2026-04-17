@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using QuantityMeasurementAppBusinessLayer.Interfaces;
 using QuantityMeasurementAppBusinessLayer.Services;
 using QuantityMeasurementAppRepositoryLayer.Context;
@@ -7,6 +8,53 @@ using QuantityMeasurementAppRepositoryLayer.Repositories;
 using Swashbuckle.AspNetCore.Annotations;
 
 var builder = WebApplication.CreateBuilder(args);
+
+static string NormalizePostgresConnectionString(string? rawConnectionString)
+{
+    if (string.IsNullOrWhiteSpace(rawConnectionString))
+    {
+        throw new InvalidOperationException("Database connection string is missing. Set ConnectionStrings__DefaultConnection in environment variables.");
+    }
+
+    // Already in standard Npgsql key-value format
+    if (!rawConnectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
+        !rawConnectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    {
+        return rawConnectionString;
+    }
+
+    var uri = new Uri(rawConnectionString);
+    var userInfo = uri.UserInfo.Split(':', 2);
+
+    if (userInfo.Length != 2)
+    {
+        throw new InvalidOperationException("Invalid PostgreSQL URL format. Username or password is missing.");
+    }
+
+    var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = uri.AbsolutePath.Trim('/'),
+        Username = Uri.UnescapeDataString(userInfo[0]),
+        Password = Uri.UnescapeDataString(userInfo[1]),
+        SslMode = SslMode.Require,
+        TrustServerCertificate = true
+    };
+
+    if (bool.TryParse(query["Pooling"], out var pooling))
+    {
+        builder.Pooling = pooling;
+    }
+
+    if (int.TryParse(query["Maximum Pool Size"], out var maxPoolSize) || int.TryParse(query["max_pool_size"], out maxPoolSize))
+    {
+        builder.MaxPoolSize = maxPoolSize;
+    }
+
+    return builder.ConnectionString;
+}
 
 // Add controllers
 builder.Services.AddControllers();
@@ -45,9 +93,15 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// Database - PostgreSQL (Neon)
+// Database - PostgreSQL (Neon / Render)
+var rawConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? builder.Configuration["ConnectionStrings:DefaultConnection"]
+    ?? builder.Configuration["DATABASE_URL"];
+
+var normalizedConnectionString = NormalizePostgresConnectionString(rawConnectionString);
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(normalizedConnectionString));
 
 // Dependency Injection
 builder.Services.AddScoped<IQuantityMeasurementService, QuantityMeasurementService>();
@@ -75,8 +129,17 @@ var app = builder.Build();
 // Auto-migrate database on startup
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    try
+    {
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.Database.Migrate();
+        Console.WriteLine("Database migration completed successfully.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Database migration failed: {ex.Message}");
+        throw;
+    }
 }
 
 // Swagger always enabled (useful for testing deployed API)
