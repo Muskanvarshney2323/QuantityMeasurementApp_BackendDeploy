@@ -6,7 +6,6 @@ using QuantityMeasurementAppBusinessLayer.Services;
 using QuantityMeasurementAppRepositoryLayer.Context;
 using QuantityMeasurementAppRepositoryLayer.Interfaces;
 using QuantityMeasurementAppRepositoryLayer.Repositories;
-using Swashbuckle.AspNetCore.Annotations;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,10 +13,11 @@ static string NormalizePostgresConnectionString(string? rawConnectionString)
 {
     if (string.IsNullOrWhiteSpace(rawConnectionString))
     {
-        throw new InvalidOperationException("Database connection string is missing. Set ConnectionStrings__DefaultConnection in environment variables.");
+        throw new InvalidOperationException(
+            "Database connection string is missing. Set ConnectionStrings__DefaultConnection in environment variables.");
     }
 
-    // Already in standard Npgsql key-value format
+    // If already in normal Npgsql format, return as it is
     if (!rawConnectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
         !rawConnectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
     {
@@ -29,11 +29,13 @@ static string NormalizePostgresConnectionString(string? rawConnectionString)
 
     if (userInfo.Length != 2)
     {
-        throw new InvalidOperationException("Invalid PostgreSQL URL format. Username or password is missing.");
+        throw new InvalidOperationException(
+            "Invalid PostgreSQL URL format. Username or password is missing.");
     }
 
     var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-    var builder = new NpgsqlConnectionStringBuilder
+
+    var connectionBuilder = new NpgsqlConnectionStringBuilder
     {
         Host = uri.Host,
         Port = uri.IsDefaultPort ? 5432 : uri.Port,
@@ -45,15 +47,16 @@ static string NormalizePostgresConnectionString(string? rawConnectionString)
 
     if (bool.TryParse(query["Pooling"], out var pooling))
     {
-        builder.Pooling = pooling;
+        connectionBuilder.Pooling = pooling;
     }
 
-    if (int.TryParse(query["Maximum Pool Size"], out var maxPoolSize) || int.TryParse(query["max_pool_size"], out maxPoolSize))
+    if (int.TryParse(query["Maximum Pool Size"], out var maxPoolSize) ||
+        int.TryParse(query["max_pool_size"], out maxPoolSize))
     {
-        builder.MaxPoolSize = maxPoolSize;
+        connectionBuilder.MaxPoolSize = maxPoolSize;
     }
 
-    return builder.ConnectionString;
+    return connectionBuilder.ConnectionString;
 }
 
 // Add controllers
@@ -113,14 +116,17 @@ builder.Services.AddScoped<IQuantityMeasurementRepository, QuantityMeasurementDa
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IUserService, UserService>();
 
-// CORS - allow all origins for production
+// CORS - allow local frontend and deployed frontend
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        policy.WithOrigins(
+                "http://localhost:5173",
+                "https://quantitymeasurementapp-frontenddeploy.onrender.com"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod();
     });
 });
 
@@ -146,11 +152,12 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// Swagger always enabled (useful for testing deployed API)
+// Swagger
 app.UseSwagger(c =>
 {
     c.RouteTemplate = "swagger/{documentName}/swagger.json";
 });
+
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Quantity Measurement API v1");
@@ -158,7 +165,7 @@ app.UseSwaggerUI(c =>
 });
 
 // Middleware
-app.UseCors("AllowAll");
+app.UseCors("AllowFrontend");
 
 app.UseAuthorization();
 
