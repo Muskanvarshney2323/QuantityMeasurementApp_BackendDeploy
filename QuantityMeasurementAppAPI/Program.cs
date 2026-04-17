@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using QuantityMeasurementAppBusinessLayer.Interfaces;
 using QuantityMeasurementAppBusinessLayer.Services;
@@ -39,8 +40,7 @@ static string NormalizePostgresConnectionString(string? rawConnectionString)
         Database = uri.AbsolutePath.Trim('/'),
         Username = Uri.UnescapeDataString(userInfo[0]),
         Password = Uri.UnescapeDataString(userInfo[1]),
-        SslMode = SslMode.Require,
-        TrustServerCertificate = true
+        SslMode = SslMode.Require
     };
 
     if (bool.TryParse(query["Pooling"], out var pooling))
@@ -101,7 +101,11 @@ var rawConnectionString = builder.Configuration.GetConnectionString("DefaultConn
 var normalizedConnectionString = NormalizePostgresConnectionString(rawConnectionString);
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(normalizedConnectionString));
+{
+    options.UseNpgsql(normalizedConnectionString);
+    options.ConfigureWarnings(warnings =>
+        warnings.Ignore(RelationalEventId.PendingModelChangesWarning));
+});
 
 // Dependency Injection
 builder.Services.AddScoped<IQuantityMeasurementService, QuantityMeasurementService>();
